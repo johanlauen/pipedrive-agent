@@ -3,11 +3,11 @@ services:
     name: pipedrive-agent
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PIPEDRIVE_API_TOKEN
-        sync: false   # denne er OK for web-tjenesten
+        sync: false         # legg inn verdien i Render etterpå
       - key: PIPEDRIVE_BASE
         value: https://api.pipedrive.com/v1
       - key: TZ
@@ -15,9 +15,9 @@ services:
 
   - type: cron
     name: pipedrive-daily-sweep
-    plan: free
     schedule: "0 6 * * *"   # 06:00 UTC = 08:00 Oslo (sommertid)
-    command: bash -lc 'curl -X POST "$DAILY_SWEEP_URL" -H "Content-Type: application/json"'
+    command: "bash -lc 'curl -sS -X POST \"$DAILY_SWEEP_URL\" -H \"Content-Type: application/json\"'"
     envVars:
       - key: DAILY_SWEEP_URL
         value: https://REPLACE-WITH-YOUR-APP.onrender.com/daily-sweep
+
