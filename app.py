@@ -16,13 +16,58 @@ def pd_get(path: str, params: Dict[str, Any] = None):
     return r.json()
 
 def pd_post(path: str, data: Dict[str, Any]):
-    params = {"api_token": API_TOKEN}
-    r = httpx.post(f"{PIPEDRIVE_BASE}{path}", params=params, json=data, timeout=30)
-    r.raise_for_status()
+    _params = {"api_token": API_TOKEN}
+    r = httpx.post(f"{PIPEDRIVE_BASE}{path}", params=_params, json=data, timeout=30)
+    if r.status_code >= 400:
+        # Viktig for feilsøk: se nøyaktig hva Pipedrive klager på
+        print(f"[PIPEDRIVE POST {path}] {r.status_code} {r.text}")
+        print(f"[PIPEDRIVE POST PAYLOAD] {data}")
+        r.raise_for_status()
     return r.json()
 
-def add_note(deal_id: int, content: str):
-    return pd_post("/notes", {"deal_id": deal_id, "content": content})
+def add_note(
+    content: str,
+    deal_id: Any = None,
+    person_id: Any = None,
+    org_id: Any = None,
+    lead_id: Any = None,
+):
+    payload = {"content": content}
+
+    # deal_id/person_id/org_id kan komme som int, str, eller dict {"value": 123}
+    def _extract_id(val):
+        if isinstance(val, dict):
+            return val.get("value") or val.get("id")
+        return val
+
+    if deal_id is not None:
+        try:
+            payload["deal_id"] = int(_extract_id(deal_id))
+        except Exception:
+            pass
+
+    if "deal_id" not in payload and person_id is not None:
+        try:
+            payload["person_id"] = int(_extract_id(person_id))
+        except Exception:
+            pass
+
+    if all(k not in payload for k in ("deal_id", "person_id")) and org_id is not None:
+        try:
+            payload["org_id"] = int(_extract_id(org_id))
+        except Exception:
+            pass
+
+    # lead_id er typisk en streng-ID i Pipedrive
+    if all(k not in payload for k in ("deal_id", "person_id", "org_id")) and lead_id is not None:
+        payload["lead_id"] = str(_extract_id(lead_id))
+
+    if all(k not in payload for k in ("deal_id", "person_id", "org_id", "lead_id")):
+        # Dette var sannsynligvis grunnen til 400 hos deg
+        raise RuntimeError("Note mangler link: deal_id/person_id/org_id/lead_id")
+
+    return pd_post("/notes", payload)
+
 
 def add_activity(deal_id: int, subject: str, due_in_days: int = 3, type_: str = "call"):
     due = (dt.datetime.utcnow() + dt.timedelta(days=due_in_days)).strftime("%Y-%m-%d")
