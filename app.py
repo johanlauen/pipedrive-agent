@@ -1,7 +1,7 @@
 import os, datetime as dt
 from typing import Dict, Any
 import httpx
-from fastapi import FastAPI, Request, Header
+from fastapi import FastAPI, Request, Header, BackgroundTasks
 
 PIPEDRIVE_BASE = os.getenv("PIPEDRIVE_BASE", "https://api.pipedrive.com/v1")
 API_TOKEN = os.getenv("PIPEDRIVE_API_TOKEN")
@@ -55,45 +55,41 @@ def health():
 
 # Webhook fra Pipedrive
 @app.post("/webhook")
-async def webhook(request: Request, x_pipedrive_signature: str | None = Header(default=None)):
-    payload = await request.json()
+async def webhook(request: Request, background_tasks: BackgroundTasks, x_pipedrive_signature: str | None = Header(default=None)):
+    # Les payload trygt
+    try:
+        payload = await request.json()
+    except Exception as e:
+        print("[WEBHOOK] invalid json:", repr(e))
+        return {"ok": False, "error": "invalid json"}
 
-    # Pipedrive sender ulike varianter (v1/v2). Vi henter trygt fra begge.
+    # Hent felter på tvers av Pipedrive-varianter (deal changed/updated, v1/v2)
     meta = payload.get("meta") or {}
-    event = payload.get("event")  # kan være "updated.deal" i noen varianter
+    event = payload.get("event") or ""
     action = meta.get("action") or payload.get("event_action") or ""
-    obj = meta.get("object") or payload.get("event_object") or ""
+    obj = meta.get("object") or payload.get("event_object") or "deal"
 
-    current = (
-        payload.get("current")
-        or payload.get("data", {}).get("current")
-        or {}
-    )
-    previous = (
-        payload.get("previous")
-        or payload.get("data", {}).get("previous")
-        or {}
-    )
+    current = payload.get("current") or payload.get("data", {}).get("current") or {}
+    previous = payload.get("previous") or payload.get("data", {}).get("previous") or {}
 
     deal_id = current.get("id") or meta.get("id")
     stage_cur = current.get("stage_id")
     stage_prev = previous.get("stage_id")
 
-    # Logg for feilsøk
-    print(f"[WEBHOOK] event={event} action={action} object={obj} deal_id={deal_id} stage {stage_prev}->{stage_cur}")
+    print(f"[WEBHOOK] action={action or event} object={obj} deal_id={deal_id} stage {stage_prev}->{stage_cur}")
 
-    # Legg note KUN når vi faktisk har en deal_id
-    if deal_id:
-        # Vil du bare notere ved reell stage-endring? Behold denne if-en:
-        if stage_prev != stage_cur:
-            add_note(deal_id, f"Webhook: stage {stage_prev} → {stage_cur} @ {dt.datetime.utcnow().isoformat()}Z")
-        else:
-            # Om du heller vil logge alle endringer, bytt til å alltid legge note.
-            add_note(deal_id, f"Webhook mottatt (action={action or 'n/a'}, object={obj or 'n/a'}) @ {dt.datetime.utcnow().isoformat()}Z")
+    # Skriv note i BAKGRUNN etter at vi har returnert 200 til Pipedrive
+    def _write_note_bg():
+        if not deal_id:
+            return
+        msg = f"Webhook: stage {stage_prev} → {stage_cur} @ {dt.datetime.utcnow().isoformat()}Z"
+        try:
+            add_note(deal_id, msg)  # bruker PIPEDRIVE_API_TOKEN
+        except Exception as e:
+            print("[WEBHOOK add_note ERROR]", repr(e))
 
-    # Alltid 200, så Pipedrive slipper å spamme retries mens vi tester
+    background_tasks.add_task(_write_note_bg)
     return {"ok": True}
-
 
 # Daglig sweep (kalles av cron)
 @app.post("/daily-sweep")
