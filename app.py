@@ -101,40 +101,43 @@ def health():
 # Webhook fra Pipedrive
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks, x_pipedrive_signature: str | None = Header(default=None)):
-    # Les payload trygt
     try:
         payload = await request.json()
     except Exception as e:
         print("[WEBHOOK] invalid json:", repr(e))
         return {"ok": False, "error": "invalid json"}
 
-    # Hent felter på tvers av Pipedrive-varianter (deal changed/updated, v1/v2)
     meta = payload.get("meta") or {}
-    event = payload.get("event") or ""
-    action = meta.get("action") or payload.get("event_action") or ""
-    obj = meta.get("object") or payload.get("event_object") or "deal"
-
     current = payload.get("current") or payload.get("data", {}).get("current") or {}
     previous = payload.get("previous") or payload.get("data", {}).get("previous") or {}
 
+    # IDs kan ha ulike former – vi sender alle vi finner
     deal_id = current.get("id") or meta.get("id")
+    person_id = current.get("person_id")
+    org_id = current.get("org_id")
+    lead_id = current.get("lead_id") if "lead_id" in current else (meta.get("id") if (meta.get("object") == "lead") else None)
+
     stage_cur = current.get("stage_id")
     stage_prev = previous.get("stage_id")
 
-    print(f"[WEBHOOK] action={action or event} object={obj} deal_id={deal_id} stage {stage_prev}->{stage_cur}")
+    print(f"[WEBHOOK] deal_id={deal_id} person_id={person_id} org_id={org_id} lead_id={lead_id} stage {stage_prev}->{stage_cur}")
 
-    # Skriv note i BAKGRUNN etter at vi har returnert 200 til Pipedrive
     def _write_note_bg():
-        if not deal_id:
-            return
-        msg = f"Webhook: stage {stage_prev} → {stage_cur} @ {dt.datetime.utcnow().isoformat()}Z"
         try:
-            add_note(deal_id, msg)  # bruker PIPEDRIVE_API_TOKEN
+            msg = f"Webhook: stage {stage_prev} → {stage_cur} @ {dt.datetime.utcnow().isoformat()}Z"
+            add_note(
+                msg,
+                deal_id=deal_id,
+                person_id=person_id,
+                org_id=org_id,
+                lead_id=lead_id,
+            )
         except Exception as e:
             print("[WEBHOOK add_note ERROR]", repr(e))
 
     background_tasks.add_task(_write_note_bg)
     return {"ok": True}
+
 
 # Daglig sweep (kalles av cron)
 @app.post("/daily-sweep")
